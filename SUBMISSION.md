@@ -4,18 +4,22 @@
 
 **Code:** https://github.com/elliot14A/hyatus-assessment
 
-- **Fixed `GET /api/next-request`**: The endpoint now returns only open requests (`records.filter((item) => item.status === "open")`). The starter code sorted all records without checking status, which recommended the already-resolved request `GD-104` (urgent, oldest) on page load.
-- **Tie-break**: Fixed. The starter code broke exact ties with a descending ID sort (`b.id.localeCompare(a.id)`), which picked `GD-105` over `GD-103`. I fixed this to an ascending ID sort (`a.id.localeCompare(b.id)`), selecting `GD-103` first.
-- **Reason text**: Kept the server reason string (`"Highest urgency, then oldest request."` when a request is recommended, and `"No open requests remain."` when the queue is empty).
-- **Kept the PATCH "mark handled" flow unchanged**: I first suspected it was broken, but it works as designed. A misleading UI state caused the confusion: the browser was hitting a stale in-memory server process that had not reloaded our changes, so `GET /api/next-request` kept returning already-resolved `GD-104`. Clicking "Mark handled" sent the PATCH successfully, but the next recommendation request returned `GD-104` again, making the button look unresponsive. Restarting the server with native watch mode fixed this, and I added tests to lock in the behavior.
-- **Usability**: The **Handle next** banner now shows the recommended request's key details: guest name, room number, urgency tag, and description text. It also adds a visual "Next up" badge to the matching card in the list. These details come directly from the backend recommendation, so the operator can act without having to search the list below. I considered adding a separate detail view for each task, but kept the change minimal, focused, and free of extra dependencies.
+- **Added `snoozedUntil` filtering in `GET /api/next-request`**: The endpoint now checks `snoozedUntil` against the current time (`Date.now()`). If a request has a valid date later than now, the recommendation engine skips it.
+- **What didn't change**: Requests with missing, invalid, or expired timestamps are not hidden and are ranked exactly as before. All stage 2 rules remain in place: resolved requests are never recommended, and the ordering is strictly urgency (`urgent` > `normal` > `low`), then oldest `createdAt`, then ascending request ID for exact ties. No timers, schedulers, or new storage mechanisms were added.
+- **Stage 2 triage rules preserved**:
+  - `records.filter((item) => item.status === "open")` ensures resolved requests (`GD-104`) are never recommended.
+  - Exact ties break on ascending alphanumeric request ID (`a.id.localeCompare(b.id)`), selecting `GD-103` over `GD-105`.
+  - Reason strings remain clean and server-defined (`"Highest urgency, then oldest request."` or `"No open requests remain."`).
+  - PATCH "mark handled" endpoint and UI flow remain unchanged.
+  - Usability improvement: The Handle next banner and list cards display complete request context (guest, room, urgency, problem detail, and date with time in UTC, e.g. "3 Nov, 08:30 UTC") and links to the inbox list with a "Next up" spotlight badge.
 
 ---
 
 ## Why
 
-- **Requirements**: Never recommend a resolved request, and sort by urgency (`urgent` > `normal` > `low`), then oldest `createdAt`, then ascending request ID for exact ties.
-- **Assumption**: Every request has a valid urgency (`urgent`, `normal`, or `low`), as defined in the data model. An unknown value results in an invalid sort order. If real-world input can lack an urgency tag, the product specification should define an explicit fallback rank and test it at the boundary, rather than adding an arbitrary default to the code.
+- **Requirements**: Allow requests to be temporarily postponed by providing a future `snoozedUntil` timestamp. When evaluated, any future timestamp skips the request from recommendation. Missing, unparseable, or expired timestamps must remain active in the triage pool without breaking ranking.
+- **Stateless time evaluation**: Evaluating `Date.now()` at the moment of request satisfies the business rule cleanly without background worker overhead, scheduled intervals, or cache invalidation complexity.
+- **Stage 2 continuity**: Ensuring all non-snoozed requests follow the established hierarchy (urgency, age, ID) preserves predictable queue triage for the operator.
 
 ---
 
@@ -23,35 +27,37 @@
 
 - **`npm test`**: Ran the native Node.js test runner (`node --test test/*.test.js`):
   ```text
-  ✔ the starter serves its page, script, and fictional request inbox (40.7ms)
-  ✔ handling a request is reflected by the next read and is safe to repeat (20.7ms)
-  ✔ invalid updates and unknown paths do not mutate the inbox or expose source (13.4ms)
-  ✔ an empty inbox remains a successful response (4.6ms)
-  ✔ next-request recommendation excludes resolved requests and breaks exact ties by ascending ID (8.4ms)
-  ✔ next-request respects urgency hierarchy and oldest timestamp within tier (5.8ms)
-  ✔ next-request returns status 200 with request null and helpful reason when queue is empty or fully resolved (5.0ms)
-  ℹ tests 7
+  ✔ the starter serves its page, script, and fictional request inbox (46.2ms)
+  ✔ handling a request is reflected by the next read and is safe to repeat (21.8ms)
+  ✔ invalid updates and unknown paths do not mutate the inbox or expose source (15.1ms)
+  ✔ an empty inbox remains a successful response (4.5ms)
+  ✔ next-request recommendation excludes resolved requests and breaks exact ties by ascending ID (8.0ms)
+  ✔ next-request respects urgency hierarchy and oldest timestamp within tier (5.5ms)
+  ✔ next-request returns status 200 with request null and helpful reason when queue is empty or fully resolved (5.6ms)
+  ✔ next-request handles snoozedUntil correctly across future, expired, missing, and invalid cases (9.2ms)
+  ℹ tests 8
   ℹ suites 0
-  ℹ pass 7
+  ℹ pass 8
   ℹ fail 0
   ```
 
-- **New tests**:
-  1. `next-request recommendation excludes resolved requests and breaks exact ties by ascending ID`: Verifies `GD-104` is never recommended, `GD-103` beats `GD-105` on exact ties, and resolving `GD-103` advances the queue to `GD-105`.
-  2. `next-request respects urgency hierarchy and oldest timestamp within tier`: Verifies urgent requests come before older normal or low requests, and ties within the same urgency level pick the oldest request.
-  3. `next-request returns status 200 with request null and helpful reason when queue is empty or fully resolved`: Verifies empty queues and fully resolved queues return `{ request: null, reason: "No open requests remain." }` with status 200.
+- **Observed test results for the four snooze cases**:
+  1. **Future case**: An urgent open request with `snoozedUntil` set 1 hour in the future was skipped; the server recommended the next eligible normal-priority request (`REGULAR-NORM`).
+  2. **Expired case**: An urgent open request with `snoozedUntil` set 1 hour in the past was not hidden; the server recommended it (`SNOOZE-PAST`) over lower-priority open requests.
+  3. **Missing case**: An urgent open request without a `snoozedUntil` property was not hidden; the server recommended it (`NO-SNOOZE`) over lower-priority open requests.
+  4. **Invalid case**: An urgent open request with an invalid date string (`"not-a-valid-date"`) was not hidden; the server recommended it (`INVALID-DATE`) over lower-priority open requests.
+  5. **All-snoozed boundary**: When all open requests are snoozed into the future, `/api/next-request` returns status 200 with `{ request: null, reason: "No open requests remain." }`.
 
-- **Browser**: Started the server with `npm start` (using native `node --watch`). Confirmed `GD-103` appeared in the banner with full guest, room, and detail metadata. Clicked "Mark handled" across all items in order (`GD-103` -> `GD-105` -> `GD-102` -> `GD-106` -> `GD-101`), confirming the banner showed "All caught up." with "No open requests remain." and hid the action button. Switched between "Open requests", "All requests", and "Handled" filter tabs, confirming badges and cards stayed synchronized.
+- **Browser**: Started server via `npm start` with native `node --watch`. Verified `GD-103` loaded in the triage banner and stepped through the queue until reaching the "All caught up." state.
 
-- **Unverified**: Simulated network drops and timeout errors were not manually triggered in the browser.
 
 ---
 
 ## Working with AI
 
-- **Rejected a silent fallback**: The AI assistant first added a default rank (`(rank[a.urgency] ?? 3)`) for missing urgencies. I removed it because it would hide bad or missing data instead of surfacing it. Fallback rules belong in the product requirements, not as hard-coded guesses.
-- **Chose the usability change myself**: The AI assistant first suggested keyboard shortcuts and an undo button (an undo action already exists under the Handled tab, and both suggestions felt carried over from other projects). I chose to show the missing guest, room, and detail metadata directly inside the "Handle next" banner so the operator has the context needed to act immediately.
-- **Relying on high-value test standards**: I used my existing test guidelines to write behavior-focused tests for boundary rules, avoiding trivial assertions that only check static properties.
+- **Rejected a silent fallback**: The AI assistant originally added a speculative fallback rank (`(rank[a.urgency] ?? 3)`) for missing urgencies. I removed it because it would hide bad or missing data instead of surfacing it.
+- **Chose the usability change myself**: The AI assistant first suggested keyboard shortcuts and an undo button (an undo action already exists under the Handled tab). I redirected the focus to showing the missing guest, room, and detail metadata directly inside the "Handle next" banner so triage is self-contained.
+- **Relying on high-value test standards**: I used established testing guidelines to write behavior-focused tests for boundary rules, avoiding trivial assertions that only check static properties.
 
 ---
 
