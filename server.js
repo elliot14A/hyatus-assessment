@@ -33,6 +33,12 @@ async function readBody(req) {
   }
 }
 
+function isSnoozed(item, now = Date.now()) {
+  if (!item.snoozedUntil) return false;
+  const time = Date.parse(item.snoozedUntil);
+  return !Number.isNaN(time) && time > now;
+}
+
 // A new server starts with independent fictional records. A browser reload keeps changes;
 // restarting the process resets them. The exercise does not need a database or credentials.
 export function createStarterServer({ requests = seed } = {}) {
@@ -55,9 +61,12 @@ export function createStarterServer({ requests = seed } = {}) {
       }
       if (req.method === "GET" && pathname === "/api/next-request") {
         const rank = { urgent: 0, normal: 1, low: 2 };
-        const openRecords = records.filter((item) => item.status === "open");
+        const now = Date.now();
         // for all the requests urgency always exists and I'm assuming it always does in the real scenario as well
         // if it doesn't I can add a fallback based on requirement
+        const openRecords = records.filter(
+          (item) => item.status === "open" && !isSnoozed(item, now),
+        );
         const request =
           openRecords.toSorted(
             (a, b) =>
