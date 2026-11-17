@@ -30,7 +30,7 @@ function render() {
     if (recommendation && item.id === recommendation.id && item.status === 'open') {
       meta.append(text('span', 'Next up', 'pill next-up-pill'));
     }
-    meta.append(text('time', new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC'));
+    meta.append(text('time', new Date(item.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' }) + ' UTC'));
     body.append(meta);
     const button = text('button', item.status === 'open' ? 'Mark handled' : 'Reopen', 'handle');
     button.type = 'button'; button.disabled = busy; button.setAttribute('aria-label', `${button.textContent}: ${item.title}`);
@@ -92,7 +92,8 @@ async function loadRecommendation() {
       $('next-desc').textContent = recommendation.detail;
       $('next-meta').replaceChildren(
         text('span', `${recommendation.guest} · Room ${recommendation.room}`),
-        text('span', recommendation.urgency, `pill ${recommendation.urgency}`)
+        text('span', recommendation.urgency, `pill ${recommendation.urgency}`),
+        text('time', new Date(recommendation.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' }) + ' UTC')
       );
       $('handle-next').hidden = false;
     } else {
