@@ -44,3 +44,51 @@ test('an empty inbox remains a successful response', async t => {
   const call = await fixture(t, { requests: [] });
   assert.deepEqual(await (await call('/api/requests')).json(), { requests: [] });
 });
+
+test('next-request recommendation excludes resolved requests and breaks exact ties by ascending ID', async t => {
+  const call = await fixture(t);
+  const response = await call('/api/next-request');
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.request.id, 'GD-103');
+  assert.equal(body.reason, 'Highest urgency, then oldest request.');
+
+  await call('/api/requests/GD-103', { method: 'PATCH', body: JSON.stringify({ status: 'resolved' }) });
+  const next = await (await call('/api/next-request')).json();
+  assert.equal(next.request.id, 'GD-105');
+});
+
+test('next-request respects urgency hierarchy and oldest timestamp within tier', async t => {
+  const call = await fixture(t, {
+    requests: [
+      { id: 'REQ-1', urgency: 'low', status: 'open', createdAt: '2026-11-01T00:00:00Z' },
+      { id: 'REQ-2', urgency: 'normal', status: 'open', createdAt: '2026-11-02T00:00:00Z' },
+      { id: 'REQ-3', urgency: 'normal', status: 'open', createdAt: '2026-11-01T12:00:00Z' },
+      { id: 'REQ-4', urgency: 'urgent', status: 'open', createdAt: '2026-11-03T00:00:00Z' },
+    ]
+  });
+
+  const res1 = await (await call('/api/next-request')).json();
+  assert.equal(res1.request.id, 'REQ-4');
+
+  await call('/api/requests/REQ-4', { method: 'PATCH', body: JSON.stringify({ status: 'resolved' }) });
+
+  const res2 = await (await call('/api/next-request')).json();
+  assert.equal(res2.request.id, 'REQ-3');
+});
+
+test('next-request returns status 200 with request null and helpful reason when queue is empty or fully resolved', async t => {
+  const emptyCall = await fixture(t, { requests: [] });
+  const emptyRes = await emptyCall('/api/next-request');
+  assert.equal(emptyRes.status, 200);
+  assert.deepEqual(await emptyRes.json(), { request: null, reason: 'No open requests remain.' });
+
+  const resolvedCall = await fixture(t, {
+    requests: [
+      { id: 'REQ-X', urgency: 'urgent', status: 'resolved', createdAt: '2026-11-01T00:00:00Z' }
+    ]
+  });
+  const resolvedRes = await resolvedCall('/api/next-request');
+  assert.equal(resolvedRes.status, 200);
+  assert.deepEqual(await resolvedRes.json(), { request: null, reason: 'No open requests remain.' });
+});
