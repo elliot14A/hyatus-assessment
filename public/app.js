@@ -19,11 +19,17 @@ function render() {
   const shown = records.filter(item => filter === 'all' || item.status === filter);
   $('requests').replaceChildren(...shown.map(item => {
     const card = document.createElement('article'); card.className = 'request';
+    if (recommendation && item.id === recommendation.id && item.status === 'open') {
+      card.classList.add('next-up');
+    }
     const body = document.createElement('div');
     body.append(text('h3', item.title), text('p', item.detail));
     const meta = text('p', '', 'meta');
     meta.append(text('span', `${item.guest} · Room ${item.room}`), text('span', item.urgency, `pill ${item.urgency}`));
     if (item.status === 'resolved') meta.append(text('span', 'Handled', 'pill resolved'));
+    if (recommendation && item.id === recommendation.id && item.status === 'open') {
+      meta.append(text('span', 'Next up', 'pill next-up-pill'));
+    }
     meta.append(text('time', new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC'));
     body.append(meta);
     const button = text('button', item.status === 'open' ? 'Mark handled' : 'Reopen', 'handle');
@@ -73,15 +79,27 @@ void load();
 async function loadRecommendation() {
   $('next-status').textContent = 'Finding the next request…';
   $('next-reason').textContent = '';
+  $('next-desc').textContent = '';
+  $('next-meta').replaceChildren();
   $('next-error').hidden = true;
   $('handle-next').hidden = true;
   recommendation = null;
   try {
     const result = await api('/api/next-request');
     recommendation = result.request;
-    $('next-status').textContent = recommendation ? recommendation.title : 'All caught up.';
+    if (recommendation) {
+      $('next-status').textContent = recommendation.title;
+      $('next-desc').textContent = recommendation.detail;
+      $('next-meta').replaceChildren(
+        text('span', `${recommendation.guest} · Room ${recommendation.room}`),
+        text('span', recommendation.urgency, `pill ${recommendation.urgency}`)
+      );
+      $('handle-next').hidden = false;
+    } else {
+      $('next-status').textContent = 'All caught up.';
+      $('handle-next').hidden = true;
+    }
     $('next-reason').textContent = result.reason;
-    $('handle-next').hidden = !recommendation;
   } catch (error) {
     $('next-status').textContent = 'Recommendation unavailable.';
     $('next-error').textContent = error.message;
